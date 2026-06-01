@@ -10,9 +10,9 @@
 //
 // The package wraps the generated CREC API client and adds:
 //
-//   - block-selection helpers: [Latest], [Finalized], [BlockNumber], and the
-//     longer [LatestBlockSelection], [FinalizedBlockSelection], and
-//     [BlockNumberBlockSelection] forms;
+//   - block-selection helpers: [Latest], [Finalized], [BlockNumber], and
+//     [BlockNumberFromString], all of which return (BlockSelection, error)
+//     so an invalid selector surfaces as a normal error;
 //   - submission helpers: [Client.Create] for generic query creation and
 //     [Client.CreateEVMCall] for raw EVM call queries;
 //   - lookup helpers: [Client.Get] and [Client.List];
@@ -20,13 +20,14 @@
 //     is completed, failed, or expired;
 //   - wrapped call helpers: [Client.CallContract] and
 //     [Client.CallContractWithABI];
-//   - decoding helpers: [ResultFromQuery], [Client.ResultFromQuery],
-//     [DecodeVerifiableResult], [Client.DecodeVerifiableResult], and
+//   - decoding helpers: [ResultFromQuery], [DecodeVerifiableResult], and
 //     [DecodeVerifiableResultBytes].
 //
 // [Client.Wait] uses the client's poll interval (2 seconds by default) and
 // retries transient 429, 5xx, and common network errors. It stops immediately for
-// validation errors, missing channels, missing queries, or context cancellation.
+// validation errors, missing channels, missing queries, or context cancellation,
+// and returns [ErrWaitQueryTimeout] when the supplied maxWaitTime elapses
+// before the query reaches a terminal status.
 //
 // # What each returned part means
 //
@@ -42,8 +43,11 @@
 //
 // [CallContractResult] is the SDK's decoded view of a terminal EVM call query:
 //
-//   - QueryID, Status, ChainSelector, Target, and Query identify the API query
-//     record;
+//   - QueryID, Status, ChainSelector, and Query identify the API query record.
+//     The display-friendly target (contract address for evm_call, transaction
+//     hash for tx-style reads, etc.) lives on Query.Target — derived server-side
+//     from the request per query kind — so consumers that need it should read
+//     Query.Target (or branch on Query.QueryKind);
 //   - VerifiableResult is the original base64 string returned by CREC;
 //   - VerifiableQuery is the decoded JSON bytes of VerifiableResult for logging
 //     or archival;
@@ -64,15 +68,21 @@
 // waits for completion, decodes verifiable_result, and returns a
 // [CallContractResult].
 //
-//	result, err := client.Queries.CallContract(
-//	    ctx,
-//	    channelID,
-//	    "16015286601757825753",
-//	    "0x1234567890123456789012345678901234567890",
-//	    []byte{0x18, 0x16, 0x0d, 0xdd}, // totalSupply()
-//	    queries.Finalized(),
-//	    "total-supply-finalized-001",
-//	)
+//	finalized, err := queries.Finalized()
+//	if err != nil {
+//	    return err
+//	}
+//	result, err := client.Queries.CallContract(ctx, queries.CallContractInput{
+//	    CallInput: queries.EVMCallInput{
+//	        ChannelID:       channelID,
+//	        ChainSelector:   "16015286601757825753",
+//	        ContractAddress: "0x1234567890123456789012345678901234567890",
+//	        CallData:        []byte{0x18, 0x16, 0x0d, 0xdd}, // totalSupply()
+//	        BlockSelection:  finalized,
+//	        IdempotencyKey:  "total-supply-finalized-001",
+//	    },
+//	    MaxWaitTime: 30 * time.Second,
+//	})
 //	if err != nil {
 //	    // API, polling, or decode error.
 //	    return err
@@ -83,37 +93,48 @@
 //	}
 //	totalSupply := new(big.Int).SetBytes(result.RawReturnData)
 //
-// Use call options when needed:
+// Set FromAddress or Metadata directly on the input when needed:
 //
-//	result, err = client.Queries.CallContract(
-//	    ctx,
-//	    channelID,
-//	    chainSelector,
-//	    tokenAddress,
-//	    "0x70a08231..." /* balanceOf(address) calldata */,
-//	    queries.Latest(),
-//	    "balance-query-001",
-//	    queries.WithFromAddress("0x000000000000000000000000000000000000dEaD"),
-//	    queries.WithMetadata(map[string]interface{}{"client_reference_id": "balance-ui"}),
-//	)
+//	fromAddress := "0x000000000000000000000000000000000000dEaD"
+//	latest, err := queries.Latest()
+//	if err != nil {
+//	    return err
+//	}
+//	result, err = client.Queries.CallContract(ctx, queries.CallContractInput{
+//	    CallInput: queries.EVMCallInput{
+//	        ChannelID:       channelID,
+//	        ChainSelector:   chainSelector,
+//	        ContractAddress: tokenAddress,
+//	        CallData:        "0x70a08231...", // balanceOf(address) calldata
+//	        BlockSelection:  latest,
+//	        IdempotencyKey:  "balance-query-001",
+//	        FromAddress:     &fromAddress,
+//	        Metadata:        map[string]interface{}{"client_reference_id": "balance-ui"},
+//	    },
+//	    MaxWaitTime: 30 * time.Second,
+//	})
 //
-// # Most wrapped ABI approach
+// # Full ABI wrapper
 //
 // [Client.CallContractWithABI] packs function arguments, calls
 // [Client.CallContract], and ABI-unpacks successful return data into Outputs.
 // Human-readable function fragments and JSON ABI fragments are both accepted.
 //
-//	result, err := client.Queries.CallContractWithABI(
-//	    ctx,
-//	    channelID,
-//	    chainSelector,
-//	    tokenAddress,
-//	    "function balanceOf(address owner) view returns (uint256)",
-//	    "balanceOf",
-//	    []any{"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"},
-//	    queries.FinalizedBlockSelection(),
-//	    "balance-finalized-001",
-//	)
+//	finalized, err := queries.Finalized()
+//	if err != nil {
+//	    return err
+//	}
+//	result, err := client.Queries.CallContractWithABI(ctx, queries.CallContractWithABIInput{
+//	    ChannelID:       channelID,
+//	    ChainSelector:   chainSelector,
+//	    ContractAddress: tokenAddress,
+//	    ABIFragment:     "function balanceOf(address owner) view returns (uint256)",
+//	    FunctionName:    "balanceOf",
+//	    Args:            []any{"0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"},
+//	    BlockSelection:  finalized,
+//	    IdempotencyKey:  "balance-finalized-001",
+//	    MaxWaitTime:     30 * time.Second,
+//	})
 //	if err != nil {
 //	    return err
 //	}
@@ -127,12 +148,16 @@
 // Use [Client.CreateEVMCall] when you want to submit now and process completion
 // later. It returns only the accepted query ID and status.
 //
-//	accepted, err := client.Queries.CreateEVMCall(ctx, queries.CallContractInput{
+//	latest, err := queries.Latest()
+//	if err != nil {
+//	    return err
+//	}
+//	accepted, err := client.Queries.CreateEVMCall(ctx, queries.EVMCallInput{
 //	    ChannelID:       channelID,
 //	    ChainSelector:   chainSelector,
 //	    ContractAddress: tokenAddress,
 //	    CallData:        []byte{0x18, 0x16, 0x0d, 0xdd},
-//	    BlockSelection:  queries.LatestBlockSelection(),
+//	    BlockSelection:  latest,
 //	    IdempotencyKey:  "total-supply-async-001",
 //	})
 //	if err != nil {
@@ -141,11 +166,11 @@
 //
 // Later, await the terminal query resource and decode it:
 //
-//	query, err := client.Queries.Wait(ctx, channelID, accepted.QueryId)
+//	query, err := client.Queries.Wait(ctx, channelID, accepted.QueryId, 30*time.Second)
 //	if err != nil {
 //	    return err
 //	}
-//	result, err := client.Queries.ResultFromQuery(query)
+//	result, err := queries.ResultFromQuery(query)
 //	if err != nil {
 //	    return err
 //	}
@@ -153,10 +178,14 @@
 // For the lowest-level path, build the generated EVM params yourself and call
 // [Client.Create]. The current SDK accepts only QueryKindEVMCall.
 //
+//	finalized, err := queries.Finalized()
+//	if err != nil {
+//	    return err
+//	}
 //	params := apiClient.EVMCallQueryParams{
 //	    ContractAddress: apiClient.EthereumAddress(tokenAddress),
 //	    CallData:        "0x18160ddd",
-//	    BlockSelection:  queries.Finalized(),
+//	    BlockSelection:  finalized,
 //	}
 //	accepted, err = client.Queries.Create(ctx, queries.CreateInput{
 //	    ChannelID:      channelID,
@@ -186,7 +215,7 @@
 //	    }
 //	    for i := range page {
 //	        if page[i].QueryId == queryID {
-//	            result, err := client.Queries.ResultFromQuery(&page[i])
+//	            result, err := queries.ResultFromQuery(&page[i])
 //	            _ = result
 //	            return err
 //	        }
@@ -253,7 +282,7 @@
 // Decoding and verification are intentionally separate:
 //
 //   - The queries package decodes terminal query data. Use
-//     [Client.ResultFromQuery] for a query resource or [DecodeVerifiableResult]
+//     [ResultFromQuery] for a query resource or [DecodeVerifiableResult]
 //     for a base64 verifiable_result string.
 //   - The events package verifies OCR signatures on query.status events. Create
 //     the root client with crec.WithOrgID or crec.WithWorkflowOwner plus valid
@@ -266,11 +295,11 @@
 //	if err != nil {
 //	    return err
 //	}
-//	result, err := client.Queries.ResultFromQuery(query)
+//	result, err := queries.ResultFromQuery(query)
 //	if err != nil {
 //	    return err
 //	}
-//	decoded, err := client.Queries.DecodeVerifiableResult(result.VerifiableResult)
+//	decoded, err := queries.DecodeVerifiableResult(result.VerifiableResult)
 //
 // Verified event decode:
 //

@@ -53,10 +53,7 @@ func TestClient_CreateWithService(t *testing.T) {
 				Address:       address,
 				Status:        apiClient.WatcherStatusPending,
 			}
-			err = json.NewEncoder(w).Encode(response)
-			if err != nil {
-				return
-			}
+			require.NoError(t, json.NewEncoder(w).Encode(response))
 		}
 
 		client, server := setupTestClient(t, handler)
@@ -152,12 +149,9 @@ func TestClient_CreateWithService(t *testing.T) {
 		handler := func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			err := json.NewEncoder(w).Encode(map[string]string{
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{
 				"error": "Invalid watcher configuration",
-			})
-			if err != nil {
-				return
-			}
+			}))
 		}
 
 		client, server := setupTestClient(t, handler)
@@ -251,10 +245,7 @@ func TestClient_CreateWithABI(t *testing.T) {
 				Address:       address,
 				Status:        apiClient.WatcherStatusPending,
 			}
-			err = json.NewEncoder(w).Encode(response)
-			if err != nil {
-				return
-			}
+			require.NoError(t, json.NewEncoder(w).Encode(response))
 		}
 
 		client, server := setupTestClient(t, handler)

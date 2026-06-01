@@ -62,16 +62,20 @@ func writeJSON(t *testing.T, w http.ResponseWriter, statusCode int, body any) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	if body != nil {
-		require.NoError(t, json.NewEncoder(w).Encode(body))
-	}
+	// Always emit a JSON body (null when no body is provided) so the generated
+	// client's typed Parse*Response helpers can decode the response without
+	// failing on an empty body for error status codes.
+	require.NoError(t, json.NewEncoder(w).Encode(body))
 }
 
-func validEVMParams() apiClient.EVMCallQueryParams {
+func validEVMParams(t *testing.T) apiClient.EVMCallQueryParams {
+	t.Helper()
+	latest, err := Latest()
+	require.NoError(t, err)
 	return apiClient.EVMCallQueryParams{
 		ContractAddress: apiClient.EthereumAddress(testContractAddress),
 		CallData:        testCallData,
-		BlockSelection:  LatestBlockSelection(),
+		BlockSelection:  latest,
 	}
 }
 
@@ -209,7 +213,8 @@ func TestNewClient(t *testing.T) {
 
 func TestBlockSelectionHelpers(t *testing.T) {
 	t.Run("Latest", func(t *testing.T) {
-		selection := LatestBlockSelection()
+		selection, err := Latest()
+		require.NoError(t, err)
 
 		discriminator, err := selection.Discriminator()
 		require.NoError(t, err)
@@ -222,7 +227,8 @@ func TestBlockSelectionHelpers(t *testing.T) {
 	})
 
 	t.Run("Finalized", func(t *testing.T) {
-		selection := FinalizedBlockSelection()
+		selection, err := Finalized()
+		require.NoError(t, err)
 
 		discriminator, err := selection.Discriminator()
 		require.NoError(t, err)
@@ -231,7 +237,8 @@ func TestBlockSelectionHelpers(t *testing.T) {
 	})
 
 	t.Run("BlockNumber", func(t *testing.T) {
-		selection := BlockNumber(12345)
+		selection, err := BlockNumber(12345)
+		require.NoError(t, err)
 
 		discriminator, err := selection.Discriminator()
 		require.NoError(t, err)
@@ -244,7 +251,7 @@ func TestBlockSelectionHelpers(t *testing.T) {
 	})
 
 	t.Run("InvalidBlockNumberString", func(t *testing.T) {
-		_, err := BlockNumberBlockSelectionString("not-a-number")
+		_, err := BlockNumberFromString("not-a-number")
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidBlockSelection)
@@ -306,6 +313,9 @@ func TestClient_Create(t *testing.T) {
 		client, server := setupQueriesTestClient(t, handler)
 		defer server.Close()
 
+		latest, err := Latest()
+		require.NoError(t, err)
+
 		resp, err := client.Create(context.Background(), CreateInput{
 			ChannelID:      channelID,
 			IdempotencyKey: "idem-1",
@@ -314,7 +324,7 @@ func TestClient_Create(t *testing.T) {
 			Params: apiClient.EVMCallQueryParams{
 				ContractAddress: contractAddress,
 				CallData:        "0xABCD",
-				BlockSelection:  LatestBlockSelection(),
+				BlockSelection:  latest,
 				FromAddress:     &fromAddress,
 			},
 		})
@@ -353,7 +363,7 @@ func TestClient_Create(t *testing.T) {
 					IdempotencyKey: "idem",
 					QueryKind:      apiClient.QueryKindEVMCall,
 					ChainSelector:  testChainSelector,
-					Params:         validEVMParams(),
+					Params:         validEVMParams(t),
 				})
 
 				require.Error(t, err)
@@ -397,7 +407,7 @@ func TestClient_Create(t *testing.T) {
 					IdempotencyKey: "idem",
 					QueryKind:      apiClient.QueryKindEVMCall,
 					ChainSelector:  testChainSelector,
-					Params:         validEVMParams(),
+					Params:         validEVMParams(t),
 				}
 				tt.mutate(&input)
 
@@ -438,18 +448,21 @@ func TestClient_CreateEVMCall(t *testing.T) {
 	client, server := setupQueriesTestClient(t, handler)
 	defer server.Close()
 
+	fromAddress := testFromAddress
+	latest, err := Latest()
+	require.NoError(t, err)
 	resp, err := client.CreateEVMCall(
 		context.Background(),
-		CallContractInput{
+		EVMCallInput{
 			ChannelID:       channelID,
 			ChainSelector:   testChainSelector,
 			ContractAddress: testContractAddress,
 			CallData:        []byte{0x18, 0x16, 0x0d, 0xdd},
-			BlockSelection:  LatestBlockSelection(),
+			BlockSelection:  latest,
 			IdempotencyKey:  "raw-call-1",
+			FromAddress:     &fromAddress,
+			Metadata:        map[string]interface{}{"client_reference_id": "client-ref"},
 		},
-		WithFromAddress(testFromAddress),
-		WithMetadata(map[string]interface{}{"client_reference_id": "client-ref"}),
 	)
 
 	require.NoError(t, err)

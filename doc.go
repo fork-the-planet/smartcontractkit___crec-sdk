@@ -152,15 +152,21 @@
 //
 // The Queries client provides asynchronous EVM contract state reads:
 //
-//	result, err := client.Queries.CallContract(
-//	    ctx,
-//	    channelID,
-//	    "16015286601757825753",
-//	    "0x1234567890123456789012345678901234567890",
-//	    []byte{0x18, 0x16, 0x0d, 0xdd},
-//	    queries.LatestBlockSelection(),
-//	    "query-idempotency-key",
-//	)
+//	latest, err := queries.Latest()
+//	if err != nil {
+//	    return err
+//	}
+//	result, err := client.Queries.CallContract(ctx, queries.CallContractInput{
+//	    CallInput: queries.EVMCallInput{
+//	        ChannelID:       channelID,
+//	        ChainSelector:   "16015286601757825753",
+//	        ContractAddress: "0x1234567890123456789012345678901234567890",
+//	        CallData:        []byte{0x18, 0x16, 0x0d, 0xdd},
+//	        BlockSelection:  latest,
+//	        IdempotencyKey:  "query-idempotency-key",
+//	    },
+//	    MaxWaitTime: 30 * time.Second,
+//	})
 //	_ = result
 //	_ = err
 package crec

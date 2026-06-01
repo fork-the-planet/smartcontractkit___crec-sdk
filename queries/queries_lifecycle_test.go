@@ -176,10 +176,7 @@ func TestClient_Wait(t *testing.T) {
 	client, server := setupQueriesTestClient(t, handler)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	query, err := client.Wait(ctx, channelID, queryID)
+	query, err := client.Wait(context.Background(), channelID, queryID, time.Second)
 
 	require.NoError(t, err)
 	require.NotNil(t, query)
@@ -196,11 +193,24 @@ func TestClient_Wait_ContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 
-	query, err := client.Wait(ctx, uuid.New(), uuid.New())
+	query, err := client.Wait(ctx, uuid.New(), uuid.New(), time.Second)
 
 	require.Error(t, err)
 	assert.Nil(t, query)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "expected context deadline exceeded, got %v", err)
+}
+
+func TestClient_Wait_MaxWaitTimeout(t *testing.T) {
+	client, server := setupQueriesTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, makeAcceptedQuery(uuid.New(), uuid.New(), apiClient.QueryStatusSent))
+	})
+	defer server.Close()
+
+	query, err := client.Wait(context.Background(), uuid.New(), uuid.New(), 5*time.Millisecond)
+
+	require.Error(t, err)
+	assert.Nil(t, query)
+	assert.ErrorIs(t, err, ErrWaitQueryTimeout)
 }
 
 func TestClient_CallContract(t *testing.T) {
@@ -240,26 +250,27 @@ func TestClient_CallContract(t *testing.T) {
 	client, server := setupQueriesTestClient(t, handler)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	result, err := client.CallContract(
-		ctx,
-		channelID,
-		testChainSelector,
-		testContractAddress,
-		[]byte{0x18, 0x16, 0x0d, 0xdd},
-		LatestBlockSelection(),
-		"call-contract-1",
-		WithFromAddress(testFromAddress),
-	)
+	fromAddress := testFromAddress
+	latest, err := Latest()
+	require.NoError(t, err)
+	result, err := client.CallContract(context.Background(), CallContractInput{
+		CallInput: EVMCallInput{
+			ChannelID:       channelID,
+			ChainSelector:   testChainSelector,
+			ContractAddress: testContractAddress,
+			CallData:        []byte{0x18, 0x16, 0x0d, 0xdd},
+			BlockSelection:  latest,
+			IdempotencyKey:  "call-contract-1",
+			FromAddress:     &fromAddress,
+		},
+		MaxWaitTime: time.Second,
+	})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, queryID.String(), result.QueryID)
 	assert.Equal(t, string(apiClient.QueryStatusCompleted), result.Status)
 	assert.Equal(t, testChainSelector, result.ChainSelector)
-	assert.Equal(t, testContractAddress, result.Target)
 	assert.Equal(t, "0x5c7a", result.EventHash)
 	assert.Equal(t, []byte{0x03, 0xe8}, bytesTrimLeftZeroes(result.RawReturnData))
 	require.NotNil(t, result.Block)
@@ -316,17 +327,16 @@ func TestClient_CreateEVMCall_Wait_ResultFromQuery(t *testing.T) {
 	client, server := setupQueriesTestClient(t, handler)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
+	finalized, err := Finalized()
+	require.NoError(t, err)
 	accepted, err := client.CreateEVMCall(
-		ctx,
-		CallContractInput{
+		context.Background(),
+		EVMCallInput{
 			ChannelID:       channelID,
 			ChainSelector:   testChainSelector,
 			ContractAddress: testContractAddress,
 			CallData:        []byte{0x18, 0x16, 0x0d, 0xdd},
-			BlockSelection:  Finalized(),
+			BlockSelection:  finalized,
 			IdempotencyKey:  "async-read-1",
 		},
 	)
@@ -334,18 +344,17 @@ func TestClient_CreateEVMCall_Wait_ResultFromQuery(t *testing.T) {
 	require.NotNil(t, accepted)
 	assert.Equal(t, queryID, accepted.QueryId)
 
-	query, err := client.Wait(ctx, channelID, accepted.QueryId)
+	query, err := client.Wait(context.Background(), channelID, accepted.QueryId, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, query)
 	assert.Equal(t, apiClient.QueryStatusCompleted, query.Status)
 
-	result, err := client.ResultFromQuery(query)
+	result, err := ResultFromQuery(query)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, queryID.String(), result.QueryID)
 	assert.Equal(t, string(apiClient.QueryStatusCompleted), result.Status)
 	assert.Equal(t, testChainSelector, result.ChainSelector)
-	assert.Equal(t, testContractAddress, result.Target)
 	assert.Equal(t, big.NewInt(1000), new(big.Int).SetBytes(result.RawReturnData))
 	assert.GreaterOrEqual(t, getCount, 2)
 	assert.Nil(t, result.Error)
@@ -378,20 +387,18 @@ func TestClient_CallContractWithABI(t *testing.T) {
 	client, server := setupQueriesTestClient(t, handler)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	result, err := client.CallContractWithABI(
-		ctx,
-		channelID,
-		testChainSelector,
-		testContractAddress,
-		"function totalSupply() view returns (uint256)",
-		"totalSupply",
-		nil,
-		LatestBlockSelection(),
-		"abi-call-1",
-	)
+	latest, err := Latest()
+	require.NoError(t, err)
+	result, err := client.CallContractWithABI(context.Background(), CallContractWithABIInput{
+		ChannelID:       channelID,
+		ChainSelector:   testChainSelector,
+		ContractAddress: testContractAddress,
+		ABIFragment:     "function totalSupply() view returns (uint256)",
+		FunctionName:    "totalSupply",
+		BlockSelection:  latest,
+		IdempotencyKey:  "abi-call-1",
+		MaxWaitTime:     time.Second,
+	})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -402,51 +409,88 @@ func TestClient_CallContractWithABI(t *testing.T) {
 	assert.Equal(t, big.NewInt(1000), output)
 }
 
+func TestClient_CallContractWithABI_MaxWaitTimeout(t *testing.T) {
+	channelID := uuid.New()
+	queryID := uuid.New()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			writeJSON(t, w, http.StatusAccepted, apiClient.QueryAcceptedResponse{
+				QueryId: queryID,
+				Status:  apiClient.QueryStatusAccepted,
+			})
+		case http.MethodGet:
+			writeJSON(t, w, http.StatusOK, makeAcceptedQuery(channelID, queryID, apiClient.QueryStatusSent))
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}
+
+	client, server := setupQueriesTestClient(t, handler)
+	defer server.Close()
+
+	latest, err := Latest()
+	require.NoError(t, err)
+	result, err := client.CallContractWithABI(context.Background(), CallContractWithABIInput{
+		ChannelID:       channelID,
+		ChainSelector:   testChainSelector,
+		ContractAddress: testContractAddress,
+		ABIFragment:     "function totalSupply() view returns (uint256)",
+		FunctionName:    "totalSupply",
+		BlockSelection:  latest,
+		IdempotencyKey:  "abi-call-timeout",
+		MaxWaitTime:     5 * time.Millisecond,
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrWaitQueryTimeout)
+}
+
 func TestClient_CallContractWithABI_Validation(t *testing.T) {
 	client, server := setupQueriesTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("request should not be sent for ABI validation failures")
 	})
 	defer server.Close()
 
-	_, err := client.CallContractWithABI(
-		context.Background(),
-		uuid.New(),
-		testChainSelector,
-		testContractAddress,
-		"",
-		"",
-		nil,
-		LatestBlockSelection(),
-		"abi-validation-1",
-	)
+	latest, err := Latest()
+	require.NoError(t, err)
+
+	_, err = client.CallContractWithABI(context.Background(), CallContractWithABIInput{
+		ChannelID:       uuid.New(),
+		ChainSelector:   testChainSelector,
+		ContractAddress: testContractAddress,
+		ABIFragment:     "",
+		FunctionName:    "",
+		BlockSelection:  latest,
+		IdempotencyKey:  "abi-validation-1",
+	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrABIRequired)
 
-	_, err = client.CallContractWithABI(
-		context.Background(),
-		uuid.New(),
-		testChainSelector,
-		testContractAddress,
-		"function balanceOf(address) view returns (uint256)",
-		"balanceOf",
-		nil,
-		LatestBlockSelection(),
-		"abi-validation-2",
-	)
+	_, err = client.CallContractWithABI(context.Background(), CallContractWithABIInput{
+		ChannelID:       uuid.New(),
+		ChainSelector:   testChainSelector,
+		ContractAddress: testContractAddress,
+		ABIFragment:     "function balanceOf(address) view returns (uint256)",
+		FunctionName:    "balanceOf",
+		BlockSelection:  latest,
+		IdempotencyKey:  "abi-validation-2",
+	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrABIArgumentCount)
 
-	_, err = client.CallContractWithABI(
-		context.Background(),
-		uuid.New(),
-		testChainSelector,
-		testContractAddress,
-		"function balanceOf(address) view returns (uint256)",
-		"balanceOf",
-		[]any{"not-an-address"},
-		LatestBlockSelection(),
-		"abi-validation-3",
-	)
+	_, err = client.CallContractWithABI(context.Background(), CallContractWithABIInput{
+		ChannelID:       uuid.New(),
+		ChainSelector:   testChainSelector,
+		ContractAddress: testContractAddress,
+		ABIFragment:     "function balanceOf(address) view returns (uint256)",
+		FunctionName:    "balanceOf",
+		Args:            []any{"not-an-address"},
+		BlockSelection:  latest,
+		IdempotencyKey:  "abi-validation-3",
+	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrABIArgumentType)
 }
@@ -466,7 +510,6 @@ func TestResultFromQuery(t *testing.T) {
 		assert.Equal(t, string(apiClient.QueryStatusCompleted), result.Status)
 		assert.Equal(t, testChainSelector, result.ChainSelector)
 		assert.Equal(t, "0x5c7a", result.EventHash)
-		assert.Equal(t, testContractAddress, result.Target)
 		assert.Equal(t, rawReturnData, "0x"+hex.EncodeToString(result.RawReturnData))
 		require.NotNil(t, result.Block)
 		assert.Equal(t, "12345678", result.Block.BlockNumber)
