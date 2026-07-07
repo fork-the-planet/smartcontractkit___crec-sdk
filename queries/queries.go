@@ -54,8 +54,8 @@ var (
 	ErrInvalidHexBytes          = errors.New("invalid 0x-prefixed even-length hex bytes")
 
 	// API/resource errors.
-	ErrChannelNotFound     = errors.New("channel not found")
-	ErrQueryNotFound       = errors.New("query not found")
+	ErrChannelNotFound     = apierror.ErrChannelNotFound
+	ErrQueryNotFound       = apierror.ErrQueryNotFound
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
 	ErrRateLimitExceeded   = errors.New("rate limit exceeded")
 	ErrCreateQuery         = errors.New("failed to create query")
@@ -275,6 +275,10 @@ func (c *Client) Create(ctx context.Context, input CreateInput) (*apiClient.Quer
 		return nil, fmt.Errorf("%w: %w", ErrCreateQuery, err)
 	}
 
+	if resp == nil {
+		return nil, fmt.Errorf("%w: %w", ErrCreateQuery, apierror.ErrNilResponse)
+	}
+
 	switch resp.StatusCode() {
 	case http.StatusAccepted:
 		if resp.JSON202 == nil {
@@ -286,7 +290,14 @@ func (c *Client) Create(ctx context.Context, input CreateInput) (*apiClient.Quer
 			"status", resp.JSON202.Status)
 		return resp.JSON202, nil
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: channel ID %s", ErrChannelNotFound, input.ChannelID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "creating query", apierror.ErrChannelNotFound),
+			"channel_id", input.ChannelID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapChannelNotFound(
+			resp.JSON404, ErrCreateQuery, "channel ID "+input.ChannelID.String(),
+		)
 	case http.StatusConflict:
 		return nil, fmt.Errorf("%w: %w", ErrCreateQuery, ErrIdempotencyConflict)
 	case http.StatusTooManyRequests:
@@ -335,6 +346,10 @@ func (c *Client) Get(ctx context.Context, channelID uuid.UUID, queryID uuid.UUID
 		return nil, fmt.Errorf("%w: %w", ErrGetQuery, err)
 	}
 
+	if resp == nil {
+		return nil, fmt.Errorf("%w: %w", ErrGetQuery, apierror.ErrNilResponse)
+	}
+
 	switch resp.StatusCode() {
 	case http.StatusOK:
 		if resp.JSON200 == nil {
@@ -342,7 +357,17 @@ func (c *Client) Get(ctx context.Context, channelID uuid.UUID, queryID uuid.UUID
 		}
 		return resp.JSON200, nil
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: query ID %s in channel %s", ErrQueryNotFound, queryID.String(), channelID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "getting query", nil),
+			"channel_id", channelID.String(),
+			"query_id", queryID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapNotFound(
+			resp.JSON404,
+			ErrGetQuery,
+			fmt.Sprintf("channel ID %s, query ID %s", channelID.String(), queryID.String()),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error("Unauthorized when getting query",
 			"status_code", resp.StatusCode(),
@@ -380,6 +405,10 @@ func (c *Client) List(ctx context.Context, input ListInput) ([]apiClient.Query, 
 		return nil, false, fmt.Errorf("%w: %w", ErrListQueries, err)
 	}
 
+	if resp == nil {
+		return nil, false, fmt.Errorf("%w: %w", ErrListQueries, apierror.ErrNilResponse)
+	}
+
 	switch resp.StatusCode() {
 	case http.StatusOK:
 		if resp.JSON200 == nil {
@@ -387,7 +416,14 @@ func (c *Client) List(ctx context.Context, input ListInput) ([]apiClient.Query, 
 		}
 		return resp.JSON200.Data, resp.JSON200.HasMore, nil
 	case http.StatusNotFound:
-		return nil, false, fmt.Errorf("%w: channel ID %s", ErrChannelNotFound, input.ChannelID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "listing queries", apierror.ErrChannelNotFound),
+			"channel_id", input.ChannelID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, false, apierror.WrapChannelNotFound(
+			resp.JSON404, ErrListQueries, "channel ID "+input.ChannelID.String(),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error("Unauthorized when listing queries",
 			"status_code", resp.StatusCode(),

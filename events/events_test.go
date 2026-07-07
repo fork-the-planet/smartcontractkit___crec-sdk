@@ -140,7 +140,13 @@ func TestClient_ListEvents(t *testing.T) {
 
 	t.Run("ChannelNotFound", func(t *testing.T) {
 		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+				"message": "channel with ID " + channelID.String() + " not found",
+				"type":    "NOT_FOUND",
+				"code":    "CHANNEL_NOT_FOUND",
+			}))
 		}
 		c, server := setupTestClient(t, handler)
 		defer server.Close()
@@ -381,7 +387,13 @@ func TestClient_SearchEvents(t *testing.T) {
 
 	t.Run("ChannelNotFound", func(t *testing.T) {
 		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+				"message": "channel with ID " + channelID.String() + " not found",
+				"type":    "NOT_FOUND",
+				"code":    "CHANNEL_NOT_FOUND",
+			}))
 		}
 		c, server := setupTestClient(t, handler)
 		defer server.Close()

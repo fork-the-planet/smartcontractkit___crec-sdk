@@ -22,7 +22,10 @@ const watcherNameMinRunes = 4
 
 var (
 	// ErrWatcherNotFound is returned when a watcher is not found (404 response).
-	ErrWatcherNotFound = errors.New("watcher not found")
+	ErrWatcherNotFound = apierror.ErrWatcherNotFound
+
+	// ErrChannelNotFound is returned when the channel does not exist (404 response).
+	ErrChannelNotFound = apierror.ErrChannelNotFound
 
 	// ErrChannelIDRequired is returned when the channel ID is nil or empty.
 	ErrChannelIDRequired = errors.New("channel_id cannot be empty")
@@ -451,6 +454,15 @@ func (c *Client) List(ctx context.Context, channelID uuid.UUID, filters ListFilt
 		}
 		c.logger.Debug("Watchers listed successfully", "count", len(resp.JSON200.Data))
 		return resp.JSON200, nil
+	case http.StatusNotFound:
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "listing watchers", apierror.ErrChannelNotFound),
+			"channel_id", channelID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapChannelNotFound(
+			resp.JSON404, ErrListWatchers, "channel ID "+channelID.String(),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error(
 			"Failed to list watchers - unauthorized",
@@ -500,7 +512,17 @@ func (c *Client) Get(ctx context.Context, channelID uuid.UUID, watcherID uuid.UU
 		}
 		return resp.JSON200, nil
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: watcher ID %s", ErrWatcherNotFound, watcherID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "getting watcher", nil),
+			"channel_id", channelID.String(),
+			"watcher_id", watcherID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapNotFound(
+			resp.JSON404,
+			ErrGetWatcher,
+			fmt.Sprintf("channel ID %s, watcher ID %s", channelID.String(), watcherID.String()),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error(
 			"Failed to get watcher - unauthorized",
@@ -561,7 +583,17 @@ func (c *Client) Update(
 		c.logger.Info("Watcher updated successfully", "watcher_id", watcherID.String())
 		return resp.JSON200, nil
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: watcher ID %s", ErrWatcherNotFound, watcherID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "updating watcher", nil),
+			"channel_id", channelID.String(),
+			"watcher_id", watcherID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapNotFound(
+			resp.JSON404,
+			ErrUpdateWatcher,
+			fmt.Sprintf("channel ID %s, watcher ID %s", channelID.String(), watcherID.String()),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error(
 			"Failed to update watcher - unauthorized",
@@ -712,7 +744,17 @@ func (c *Client) Archive(ctx context.Context, channelID uuid.UUID, watcherID uui
 		c.logger.Info("Watcher archive initiated (async)", "watcher_id", watcherID.String())
 		return resp.JSON202, nil
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: watcher ID %s", ErrWatcherNotFound, watcherID.String())
+		c.logger.Warn(
+			apierror.NotFoundWarnMessage(resp.JSON404, "archiving watcher", nil),
+			"channel_id", channelID.String(),
+			"watcher_id", watcherID.String(),
+			"code", apierror.NotFoundCode(resp.JSON404),
+		)
+		return nil, apierror.WrapNotFound(
+			resp.JSON404,
+			ErrArchiveWatcher,
+			fmt.Sprintf("channel ID %s, watcher ID %s", channelID.String(), watcherID.String()),
+		)
 	case http.StatusUnauthorized:
 		c.logger.Error(
 			"Failed to archive watcher - unauthorized",
